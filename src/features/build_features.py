@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 
 import numpy as np
 import pandas as pd
@@ -92,6 +93,14 @@ def build_features(
     obj_cols = df.select_dtypes("object").columns.tolist()
     logger.info("One-hot encoding %d object columns: %s", len(obj_cols), obj_cols)
     df = pd.get_dummies(df, columns=obj_cols, drop_first=False)
+
+    # LightGBM rejects feature names with JSON-special characters ([]<>,":{}).
+    # Replace any run of non-alphanumeric/underscore characters with a single "_".
+    df.columns = [re.sub(r"[^A-Za-z0-9_]+", "_", str(col)).strip("_") for col in df.columns]
+    if df.columns.duplicated().any():
+        dupes = df.columns[df.columns.duplicated()].tolist()
+        raise ValueError(f"Duplicate feature names after sanitization: {dupes}")
+    logger.info("Sanitized feature names — %d columns, all unique", df.shape[1])
 
     # --- 9. Cast to float32 to halve memory vs float64 ---
     df = df.astype(np.float32)

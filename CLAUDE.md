@@ -40,6 +40,9 @@ pytest -x -q                        # fail fast, minimal output
 python -m src.data.download        # fetch UCI dataset → data/raw/diabetes.csv
 python -m src.data.load            # smoke-test load + print missing-value summary
 python -m src.data.make_target     # build readmitted_30d label, print class rate
+python -m src.features.build_features  # build feature matrix, print shape + memory
+python -m src.data.split           # verify patient-grouped split + leakage check
+python -m src.models.train_lgbm    # train LightGBM baseline, log to MLflow
 ```
 
 ### MLflow UI
@@ -50,11 +53,16 @@ mlflow ui --backend-store-uri ./mlruns
 ## Architecture
 
 ### Data flow
-`src/data/download.py` → `src/data/load.py` → `src/data/make_target.py` → features → models
+`src/data/download.py` → `src/data/load.py` → `src/data/make_target.py` → `src/features/build_features.py` → `src/data/split.py` → `src/models/train_lgbm.py`
 
 - **download**: fetches via `ucimlrepo` (id=296), writes `data/raw/diabetes.csv`. Skips if file exists.
 - **load**: reads CSV with explicit `str` dtype for `diag_1/2/3`, strips whitespace padding throughout, converts blank strings to NaN. The raw CSV has space-padded cells — `?` is NOT the missing marker; blank strings are.
 - **make_target**: drops ineligible dispositions (expired/hospice: ids `{11, 13, 14, 19, 20, 21}`), creates `readmitted_30d = int(readmitted == "<30")`, drops original `readmitted` column.
+- **build_features** (`src/features/build_features.py`): drops `encounter_id`/`weight`/`payer_code`, ICD-9 bucketing, fills informative missingness (`A1Cresult`, `max_glu_serum` → `"not_measured"`), collapses rare `medical_specialty` categories (<1%) → `"other"`, one-hot encodes all object columns, casts to float32. Returns `(X, y, groups)`.
+- **icd9_grouping** (`src/features/icd9_grouping.py`): maps raw ICD-9 strings to 9 clinical groups (circulatory, respiratory, digestive, diabetes, injury, musculoskeletal, genitourinary, neoplasms, other) following Strack et al. 2014.
+- **split** (`src/data/split.py`): two-stage `GroupShuffleSplit` (70/15/15) keyed on `patient_nbr`. `assert_no_patient_leakage()` confirms disjoint patient sets; always call it before training.
+- **metrics** (`src/evaluate/metrics.py`): `evaluate_binary()` returns AUROC, AUPRC, Brier score, best-F1 threshold (swept over PR curve — more meaningful than fixed 0.5 at 11% positive rate). `calibration_plot()` produces a reliability diagram.
+- **train_lgbm** (`src/models/train_lgbm.py`): runs full pipeline, early-stopping on val AUC (patience=50), logs params/metrics/artifacts to MLflow experiment `medreadmit-module1`. Saves `models/lgbm_baseline.joblib` and `models/lgbm_val_calibration.png`.
 
 ### Module plan
 - **Module 1 — Structured baseline**: LightGBM (primary), Logistic Regression (baseline), Optuna tuning, SHAP explainability, MLflow tracking. Lives in `src/models/` and `src/features/`.
@@ -91,8 +99,16 @@ The `src/` directory is installed as a package (`pip install -e .`), so imports 
 4. **Commit after each working piece** with clear messages
 
 ## Current status
-- [ ] Module 1 — Structured baseline (data layer complete: download, load, make_target)
-- [ ] Module 2 — Text branch
-- [ ] Module 3 — Fusion + deployment
+- [x] Module 1 — Structured baseline
+  - [x] Data layer: download, load, make_target
+  - [x] Features: ICD-9 bucketing, one-hot encoding, float32 cast (`src/features/`)
+  - [x] Split: patient-grouped 70/15/15 with leakage guard (`src/data/split.py`)
+  - [x] Evaluation utilities: AUROC/AUPRC/Brier/best-F1/calibration (`src/evaluate/metrics.py`)
+  - [x] LightGBM training with MLflow tracking (`src/models/train_lgbm.py`)
+  - [ ] Optuna hyperparameter tuning
+  - [ ] SHAP explainability
+  - [ ] Fairness audit across demographic groups
+- [ ] Module 2 — Text branch (Bio_ClinicalBERT on discharge notes)
+- [ ] Module 3 — Fusion + deployment (FastAPI + Streamlit)
 
 _Update this section at the end of each work session._
