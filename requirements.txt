@@ -1,0 +1,34 @@
+# --- Core data ---
+pandas>=2.2,<3.0
+numpy>=1.26,<2.0
+ucimlrepo>=0.0.7        # one-line fetch for UCI Diabetes dataset
+
+# --- Classical ML ---
+scikit-learn>=1.4,<2.0
+lightgbm>=4.3,<5.0
+xgboost>=2.0,<3.0
+
+# --- Hyperparameter tuning ---
+optuna>=3.6,<4.0
+
+# --- Explainability ---
+shap>=0.45,<1.0
+
+# --- Experiment tracking ---
+mlflow>=2.12,<3.0
+
+# --- Plotting ---
+matplotlib>=3.8,<4.0
+seaborn>=0.13,<1.0
+
+# --- Notebooks ---
+ipykernel
+jupyter
+
+# --- Dev tooling ---
+pytest>=8.2,<9.0
+ruff>=0.4,<1.0
+black>=24.4,<25.0
+
+# Week 2 will add: torch, transformers, datasets, accelerate
+# Week 3 will add: fastapi, uvicorn, pydantic, streamlit, httpx (for tests)
