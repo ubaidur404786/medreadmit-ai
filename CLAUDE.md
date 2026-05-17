@@ -66,8 +66,7 @@ mlflow ui --backend-store-uri ./mlruns
 
 ### Module plan
 - **Module 1 — Structured baseline**: LightGBM (primary), Logistic Regression (baseline), Optuna tuning, SHAP explainability, MLflow tracking. Lives in `src/models/` and `src/features/`.
-- **Module 2 — Text branch**: Fine-tune `emilyalsentzer/Bio_ClinicalBERT` on discharge notes. Train on Google Colab T4 (RTX 3050 6GB is too small at batch 16); download fine-tuned weights. Lives in `src/models/train_bert.py`.
-- **Module 3 — Fusion + product**: Late-fusion MLP combining LightGBM probability + BERT [CLS] embedding. FastAPI (`/predict`, `/health`), Streamlit frontend, Dockerized.
+- **Module 2 — Production deployment & polish**: FastAPI backend (`/predict`, `/health`) with Pydantic schemas; Streamlit frontend with risk gauge, SHAP waterfall, and fairness footnote; Docker + docker-compose; GitHub Actions CI (ruff + pytest); deployment to Hugging Face Spaces; bootstrap CIs added to fairness audit; polished README with architecture diagram and demo GIF.
 
 ### Package layout
 The `src/` directory is installed as a package (`pip install -e .`), so imports use `from src.data.load import load_raw`. Modules run as `python -m src.data.load` (not `python src/data/load.py`).
@@ -99,16 +98,9 @@ The `src/` directory is installed as a package (`pip install -e .`), so imports 
 4. **Commit after each working piece** with clear messages
 
 ## Current status
-- [x] Module 1 — Structured baseline
-  - [x] Data layer: download, load, make_target
-  - [x] Features: ICD-9 bucketing, one-hot encoding, float32 cast (`src/features/`)
-  - [x] Split: patient-grouped 70/15/15 with leakage guard (`src/data/split.py`)
-  - [x] Evaluation utilities: AUROC/AUPRC/Brier/best-F1/calibration (`src/evaluate/metrics.py`)
-  - [x] LightGBM training with MLflow tracking (`src/models/train_lgbm.py`)
-  - [ ] Optuna hyperparameter tuning
-  - [ ] SHAP explainability
-  - [ ] Fairness audit across demographic groups
-- [ ] Module 2 — Text branch (Bio_ClinicalBERT on discharge notes)
-- [ ] Module 3 — Fusion + deployment (FastAPI + Streamlit)
+- [x] Module 1 — Structured baseline (complete)
+- [ ] Module 2 — Production deployment (in progress)
+
+Decision log: Skipped multimodal text branch (MIMIC-IV not pursued); deepening deployment & engineering quality instead. See `docs/DECISIONS.md`.
 
 _Update this section at the end of each work session._
