@@ -22,6 +22,7 @@ import numpy as np
 from sklearn.linear_model import LogisticRegression
 
 from src.data.load import load_raw
+from src.models.platt_wrapper import PlattWrapper
 from src.data.make_target import build_target
 from src.data.split import assert_no_patient_leakage, patient_grouped_split
 from src.evaluate.metrics import calibration_plot, evaluate_binary
@@ -32,28 +33,6 @@ logger = logging.getLogger(__name__)
 MODELS_DIR = Path(__file__).resolve().parents[2] / "models"
 _BASELINE_PATH = MODELS_DIR / "lgbm_baseline.joblib"
 _CALIBRATED_PATH = MODELS_DIR / "lgbm_calibrated.joblib"
-
-
-class _PlattWrapper:
-    """Wraps a pre-fitted classifier with a Platt sigmoid for calibrated probabilities.
-
-    joblib-serialisable and exposes the same ``predict_proba`` interface as
-    sklearn estimators, so the saved artifact is a drop-in replacement for the
-    raw model in the FastAPI backend.
-
-    Args:
-        base_model: Any fitted classifier with a ``predict_proba`` method.
-        sigmoid: ``LogisticRegression`` fitted on the base model's raw scores.
-    """
-
-    def __init__(self, base_model: object, sigmoid: LogisticRegression) -> None:
-        self.base_model = base_model
-        self.sigmoid = sigmoid
-
-    def predict_proba(self, X: object) -> np.ndarray:
-        """Return calibrated probabilities as an (n, 2) array."""
-        scores = self.base_model.predict_proba(X)[:, 1].reshape(-1, 1)
-        return self.sigmoid.predict_proba(scores)
 
 
 def main() -> None:
@@ -105,7 +84,7 @@ def main() -> None:
     sigmoid = LogisticRegression(C=1e10, solver="lbfgs", random_state=42)
     sigmoid.fit(val_scores, y_val)
 
-    calibrated_model = _PlattWrapper(baseline_model, sigmoid)
+    calibrated_model = PlattWrapper(baseline_model, sigmoid)
 
     cal_proba: np.ndarray = calibrated_model.predict_proba(X_test)[:, 1]
     logger.info(
