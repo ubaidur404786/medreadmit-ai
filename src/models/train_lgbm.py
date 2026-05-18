@@ -63,7 +63,9 @@ def main() -> None:
     mlflow.set_experiment("medreadmit-module1")
 
     with mlflow.start_run(run_name="lgbm_baseline"):
-        logger.info("Fitting LightGBM (n_estimators=%d, early stopping=50)…", PARAMS["n_estimators"])
+        logger.info(
+            "Fitting LightGBM (n_estimators=%d, early stopping=50)…", PARAMS["n_estimators"]
+        )
 
         model = lgb.LGBMClassifier(**PARAMS)
         model.fit(

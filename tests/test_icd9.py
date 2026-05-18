@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import numpy as np
-import pytest
 
 from src.features.icd9_grouping import map_icd9_to_group
 

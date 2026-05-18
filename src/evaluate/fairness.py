@@ -49,7 +49,9 @@ def subgroup_metrics(
         if n < min_samples:
             logger.warning(
                 "Skipping subgroup %r — only %d rows (min_samples=%d)",
-                group_val, n, min_samples,
+                group_val,
+                n,
+                min_samples,
             )
             continue
 
@@ -57,7 +59,8 @@ def subgroup_metrics(
         if n_pos < 5:
             logger.warning(
                 "Skipping subgroup %r — only %d positive labels (need ≥ 5 for stable AUROC)",
-                group_val, n_pos,
+                group_val,
+                n_pos,
             )
             continue
 
@@ -76,11 +79,7 @@ def subgroup_metrics(
         logger.warning("No subgroups passed the minimum-sample filter.")
         return pd.DataFrame(columns=["subgroup", "n", "prevalence", "mean_pred", "auroc", "auprc"])
 
-    return (
-        pd.DataFrame(rows)
-        .sort_values("n", ascending=False)
-        .reset_index(drop=True)
-    )
+    return pd.DataFrame(rows).sort_values("n", ascending=False).reset_index(drop=True)
 
 
 def format_fairness_table(df: pd.DataFrame, group_name: str) -> str:

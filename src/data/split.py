@@ -135,7 +135,11 @@ if __name__ == "__main__":
     X_train, X_val, X_test, y_train, y_val, y_test = patient_grouped_split(X, y, groups)
 
     print("\n--- Split shapes ---")
-    for name, Xs, ys in [("train", X_train, y_train), ("val", X_val, y_val), ("test", X_test, y_test)]:
+    for name, Xs, ys in [
+        ("train", X_train, y_train),
+        ("val", X_val, y_val),
+        ("test", X_test, y_test),
+    ]:
         print(f"  {name:5s}  X: {Xs.shape}  y: {ys.shape}  pos rate: {ys.mean():.4f}")
 
     # Recover per-split group arrays from the original groups ndarray via index alignment.

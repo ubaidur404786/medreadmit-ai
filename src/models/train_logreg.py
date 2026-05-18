@@ -63,10 +63,12 @@ def main() -> None:
     with mlflow.start_run(run_name="logreg_baseline"):
         logger.info("Fitting Logistic Regression (StandardScaler → lbfgs, max_iter=2000)…")
 
-        model = Pipeline([
-            ("scaler", StandardScaler()),
-            ("logreg", LogisticRegression(**PARAMS)),
-        ])
+        model = Pipeline(
+            [
+                ("scaler", StandardScaler()),
+                ("logreg", LogisticRegression(**PARAMS)),
+            ]
+        )
         model.fit(X_train, y_train)
 
         logger.info("Training complete.")

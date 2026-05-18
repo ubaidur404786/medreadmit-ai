@@ -1,7 +1,9 @@
 {
   "permissions": {
     "allow": [
-      "PowerShell(python -c \"import site; print\\(site.getsitepackages\\(\\)\\)\")"
+      "PowerShell(python -c \"import site; print\\(site.getsitepackages\\(\\)\\)\")",
+      "Bash(.venv\\\\Scripts\\\\pip install *)",
+      "Bash(kill %1)"
     ]
   }
 }

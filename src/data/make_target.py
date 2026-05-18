@@ -46,9 +46,7 @@ def build_target(df: pd.DataFrame) -> pd.DataFrame:
     df["readmitted_30d"] = (df["readmitted"] == "<30").astype(int)
     df = df.drop(columns=["readmitted"])
 
-    logger.info(
-        "Positive-class rate (readmitted_30d=1): %.4f", df["readmitted_30d"].mean()
-    )
+    logger.info("Positive-class rate (readmitted_30d=1): %.4f", df["readmitted_30d"].mean())
     return df
 
 

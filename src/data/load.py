@@ -18,8 +18,9 @@ logger = logging.getLogger(__name__)
 _DIAG_DTYPES: dict[str, type] = {"diag_1": str, "diag_2": str, "diag_3": str}
 
 # At the top of the file, after the imports:
-PROJECT_ROOT = Path(__file__).resolve().parents[2]   # src/data/load.py → repo root
+PROJECT_ROOT = Path(__file__).resolve().parents[2]  # src/data/load.py → repo root
 DEFAULT_RAW_CSV = PROJECT_ROOT / "data" / "raw" / "diabetes.csv"
+
 
 def load_raw(path: Path = DEFAULT_RAW_CSV) -> pd.DataFrame:
     """Read the raw UCI Diabetes CSV and normalise whitespace-encoded missings.

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import re
 
-import numpy as np
 import pytest
 
 from src.data.load import load_raw
@@ -12,7 +11,7 @@ from src.data.make_target import build_target
 from src.features.build_features import build_features
 
 # Characters that LightGBM (and many other frameworks) reject in column names.
-_BAD_CHARS = re.compile(r'[\[\],\"<>:{}=]')
+_BAD_CHARS = re.compile(r"[\[\],\"<>:{}=]")
 
 
 @pytest.fixture(scope="module")
