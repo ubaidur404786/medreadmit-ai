@@ -230,3 +230,162 @@ def test_request_ids_unique(
     """Five sequential /predict calls must produce five distinct request_ids."""
     ids = [app_client.post("/predict", json=sample_record).json()["request_id"] for _ in range(5)]
     assert len(set(ids)) == 5, f"Duplicate request_ids detected: {ids}"
+
+
+def test_predict_returns_shap(
+    app_client: TestClient,
+    sample_record: dict[str, Any],
+) -> None:
+    """POST /predict must return exactly 5 SHAP contributions, correctly structured.
+
+    Validates:
+    - top_features has length 5
+    - each element carries feature, shap_value, feature_value
+    - every feature name is in manifest["feature_columns"]
+    - contributions are sorted by descending |shap_value|
+    """
+    resp = app_client.post("/predict", json=sample_record)
+    assert resp.status_code == 200
+
+    body = resp.json()
+    top = body["top_features"]
+
+    assert len(top) == 5, f"Expected 5 top_features, got {len(top)}"
+
+    feature_columns = set(app.state.manifest["feature_columns"])
+    for i, contrib in enumerate(top):
+        assert "feature" in contrib, f"Entry {i} missing 'feature'"
+        assert "shap_value" in contrib, f"Entry {i} missing 'shap_value'"
+        assert "feature_value" in contrib, f"Entry {i} missing 'feature_value'"
+        assert isinstance(contrib["shap_value"], float), (
+            f"Entry {i} shap_value is {type(contrib['shap_value'])}, expected float"
+        )
+        assert isinstance(contrib["feature_value"], float), (
+            f"Entry {i} feature_value is {type(contrib['feature_value'])}, expected float"
+        )
+        assert contrib["feature"] in feature_columns, (
+            f"Entry {i} feature {contrib['feature']!r} not in manifest feature_columns"
+        )
+
+    abs_shap = [abs(c["shap_value"]) for c in top]
+    assert abs_shap == sorted(abs_shap, reverse=True), (
+        f"top_features not sorted by descending |shap_value|: {abs_shap}"
+    )
+
+
+def test_predict_top_feature_is_known(app_client: TestClient) -> None:
+    """A high-risk record should rank number_inpatient in its top-5 SHAP features.
+
+    number_inpatient was the #1 feature by mean |SHAP| on the held-out test set
+    (Week 1 findings, WEEK1_RESULTS.md).  Sending a record with a very high
+    number_inpatient (5 prior inpatient visits) and low competing signals
+    should surface it in the top-5 every time.
+    """
+    high_risk_record = {
+        **_MINIMAL,
+        "number_inpatient": 5,   # strong positive predictor (#1 by mean |SHAP|)
+        "number_emergency": 0,
+        "number_outpatient": 0,
+        "num_procedures": 0,
+        "diag_1": "250.83",
+        "diag_2": "428",
+        "diag_3": "V58",
+    }
+    resp = app_client.post("/predict", json=high_risk_record)
+    assert resp.status_code == 200
+
+    body = resp.json()
+    assert body["risk_band"] == "high", (
+        f"Expected high-risk band for number_inpatient=5, got {body['risk_band']!r}"
+    )
+
+    top_feature_names = [c["feature"] for c in body["top_features"]]
+    assert "number_inpatient" in top_feature_names, (
+        f"number_inpatient not in top-5 features for high-risk record: {top_feature_names}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Batch endpoint tests
+# ---------------------------------------------------------------------------
+
+# Three structurally distinct records used across batch tests.
+_BATCH_RECORDS = [
+    _MINIMAL,
+    {**_MINIMAL, "number_inpatient": 2, "num_procedures": 1, "diag_1": "250.83"},
+    {**_MINIMAL, "number_inpatient": 5, "number_emergency": 1, "diag_1": "428", "diag_2": "V58"},
+]
+
+
+def test_batch_predict_basic(app_client: TestClient) -> None:
+    """POST /predict/batch with 3 records must return 3 predictions at indices [0, 1, 2]."""
+    resp = app_client.post("/predict/batch", json={"encounters": _BATCH_RECORDS})
+    assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+
+    body = resp.json()
+    assert body["n_processed"] == 3
+    assert len(body["predictions"]) == 3
+    assert [p["index"] for p in body["predictions"]] == [0, 1, 2]
+
+    for pred in body["predictions"]:
+        assert 0.0 <= pred["probability"] <= 1.0
+        assert pred["risk_band"] in {"low", "moderate", "high"}
+        assert len(pred["top_features"]) == 5
+
+
+def test_batch_matches_single(app_client: TestClient) -> None:
+    """Probabilities from /predict/batch must match individual /predict calls within 1e-6.
+
+    This is the batch parity test: proves that pd.concat + single predict_proba
+    produces identical scores to per-row inference.
+    """
+    single_probas = [
+        app_client.post("/predict", json=rec).json()["probability"] for rec in _BATCH_RECORDS
+    ]
+
+    batch_resp = app_client.post("/predict/batch", json={"encounters": _BATCH_RECORDS})
+    assert batch_resp.status_code == 200
+    batch_probas = [p["probability"] for p in batch_resp.json()["predictions"]]
+
+    for i, (single, batch) in enumerate(zip(single_probas, batch_probas)):
+        assert abs(single - batch) < 1e-6, (
+            f"Index {i}: single={single:.8f} batch={batch:.8f} "
+            f"delta={abs(single - batch):.2e} — batch alignment is broken"
+        )
+
+
+def test_batch_empty_rejected(app_client: TestClient) -> None:
+    """POST /predict/batch with an empty encounters list must return 422."""
+    resp = app_client.post("/predict/batch", json={"encounters": []})
+    assert resp.status_code == 422
+
+
+def test_batch_too_large_rejected(app_client: TestClient) -> None:
+    """POST /predict/batch with 101 encounters must return 422 (max_length=100)."""
+    resp = app_client.post("/predict/batch", json={"encounters": [_MINIMAL] * 101})
+    assert resp.status_code == 422
+
+
+def test_batch_latency_reasonable(app_client: TestClient, sample_record: dict[str, Any]) -> None:
+    """Batch inference must be faster per record than a single /predict call.
+
+    Sends 10 records in one batch and compares mean_latency_per_record_ms against
+    the latency_ms of a single /predict call.  Batching model scoring and SHAP
+    explanation over N rows must have lower per-record overhead than N sequential
+    single calls.
+    """
+    single_resp = app_client.post("/predict", json=sample_record)
+    assert single_resp.status_code == 200
+    single_latency_ms = single_resp.json()["latency_ms"]
+
+    batch_resp = app_client.post(
+        "/predict/batch", json={"encounters": [sample_record] * 10}
+    )
+    assert batch_resp.status_code == 200
+    mean_ms = batch_resp.json()["mean_latency_per_record_ms"]
+
+    assert mean_ms < single_latency_ms, (
+        f"Batch mean latency ({mean_ms:.2f} ms/record) is not faster than "
+        f"single /predict latency ({single_latency_ms:.2f} ms) — "
+        "batching is not providing the expected speedup"
+    )

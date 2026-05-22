@@ -3,7 +3,8 @@
     "allow": [
       "PowerShell(python -c \"import site; print\\(site.getsitepackages\\(\\)\\)\")",
       "Bash(.venv\\\\Scripts\\\\pip install *)",
-      "Bash(kill %1)"
+      "Bash(kill %1)",
+      "Bash(.venv/Scripts/python.exe -m pytest tests/test_api_client.py -v)"
     ]
   }
 }

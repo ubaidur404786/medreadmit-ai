@@ -164,6 +164,7 @@ def main() -> None:
             y_true=y_true[idx],
             y_proba=y_proba[idx],
             subgroup=subgroup.reset_index(drop=True),
+            with_ci=True,
         )
 
         results[group_name] = df_sub

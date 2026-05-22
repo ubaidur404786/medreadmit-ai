@@ -18,13 +18,23 @@ from pathlib import Path
 from uuid import uuid4
 
 import joblib
+import pandas as pd
 import uvicorn
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from src.api.feature_alignment import align_to_training_schema
-from src.api.schemas import HealthResponse, PatientEncounter, PredictionResponse, risk_band_for
+from src.api.explainer import APIExplainer
+from src.api.feature_alignment import align_batch_to_training_schema, align_to_training_schema
+from src.api.schemas import (
+    BatchPredictionItem,
+    BatchRequest,
+    BatchResponse,
+    HealthResponse,
+    PatientEncounter,
+    PredictionResponse,
+    risk_band_for,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +66,14 @@ async def lifespan(app: FastAPI):
             MODEL_VERSION,
             app.state.manifest["n_features"],
         )
+
+        t_expl = time.perf_counter()
+        app.state.explainer = APIExplainer(
+            app.state.model, app.state.manifest["feature_columns"]
+        )
+        expl_ms = (time.perf_counter() - t_expl) * 1000
+        logger.info("Explainer ready — explainer_ready=true  construction_ms=%.0f", expl_ms)
+
     except Exception:
         # Log the full traceback so the operator sees what went wrong,
         # then re-raise so uvicorn exits with a non-zero code.
@@ -165,8 +183,15 @@ async def predict(encounter: PatientEncounter, request: Request) -> PredictionRe
     # column names as the training pipeline after apply_feature_transforms.
     aligned = align_to_training_schema(encounter.model_dump(), request.app.state.manifest)
 
+    t_predict = time.perf_counter()
     proba = float(request.app.state.model.predict_proba(aligned)[0, 1])
-    latency_ms = (time.perf_counter() - t0) * 1000
+    predict_ms = (time.perf_counter() - t_predict) * 1000
+
+    t_explain = time.perf_counter()
+    contributions = request.app.state.explainer.explain(aligned, top_k=5)
+    explain_ms = (time.perf_counter() - t_explain) * 1000
+
+    total_ms = (time.perf_counter() - t0) * 1000
     band = risk_band_for(proba)
 
     # Structured audit log — encounter fields intentionally omitted (PHI hygiene).
@@ -175,7 +200,9 @@ async def predict(encounter: PatientEncounter, request: Request) -> PredictionRe
         json.dumps(
             {
                 "request_id": request_id,
-                "latency_ms": round(latency_ms, 2),
+                "total_ms": round(total_ms, 2),
+                "predict_ms": round(predict_ms, 2),
+                "explain_ms": round(explain_ms, 2),
                 "probability": round(proba, 4),
                 "risk_band": band,
             }
@@ -187,7 +214,97 @@ async def predict(encounter: PatientEncounter, request: Request) -> PredictionRe
         risk_band=band,
         model_version=MODEL_VERSION,
         request_id=request_id,
-        latency_ms=latency_ms,
+        latency_ms=total_ms,
+        top_features=contributions[0],
+    )
+
+
+@app.post(
+    "/predict/batch",
+    response_model=BatchResponse,
+    summary="Score up to 100 patient encounters in a single batched call",
+)
+async def predict_batch(batch: BatchRequest, request: Request) -> BatchResponse:
+    """Run batched inference for multiple encounters in one model call.
+
+    All encounters are aligned to the training schema individually (catching
+    per-record failures), then scored together with a single ``predict_proba``
+    and a single ``explainer.explain`` call.  This is substantially faster per
+    record than calling ``/predict`` N times.
+
+    **PHI note**: encounter fields are never written to logs.
+    """
+    request_id = uuid4().hex
+    t0 = time.perf_counter()
+    manifest = request.app.state.manifest
+
+    # Batch-align all encounters in a single apply_feature_transforms call.
+    # This is ~65× faster than calling align_to_training_schema per row because
+    # pd.get_dummies has ~32ms fixed overhead per call regardless of row count.
+    # On failure, fall back to per-row alignment to locate the offending index.
+    try:
+        X_batch = align_batch_to_training_schema(
+            [e.model_dump() for e in batch.encounters], manifest
+        )
+    except Exception as batch_exc:
+        for i, encounter in enumerate(batch.encounters):
+            try:
+                align_to_training_schema(encounter.model_dump(), manifest)
+            except Exception as exc:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Feature alignment failed for encounter at index {i}: {exc}",
+                ) from exc
+        # All per-row alignments passed but batch failed — surface the original error.
+        raise HTTPException(
+            status_code=422,
+            detail=f"Batch feature alignment failed: {batch_exc}",
+        ) from batch_exc
+
+    t_predict = time.perf_counter()
+    probas = request.app.state.model.predict_proba(X_batch)[:, 1]
+    predict_ms = (time.perf_counter() - t_predict) * 1000
+
+    t_explain = time.perf_counter()
+    all_contributions = request.app.state.explainer.explain(X_batch, top_k=5)
+    explain_ms = (time.perf_counter() - t_explain) * 1000
+
+    total_ms = (time.perf_counter() - t0) * 1000
+    n = len(batch.encounters)
+    mean_ms = total_ms / n
+
+    predictions = [
+        BatchPredictionItem(
+            index=i,
+            probability=float(probas[i]),
+            risk_band=risk_band_for(float(probas[i])),
+            top_features=all_contributions[i],
+        )
+        for i in range(n)
+    ]
+
+    logger.info(
+        "%s",
+        json.dumps(
+            {
+                "request_id": request_id,
+                "endpoint": "/predict/batch",
+                "n_processed": n,
+                "total_ms": round(total_ms, 2),
+                "predict_ms": round(predict_ms, 2),
+                "explain_ms": round(explain_ms, 2),
+                "mean_latency_per_record_ms": round(mean_ms, 2),
+            }
+        ),
+    )
+
+    return BatchResponse(
+        predictions=predictions,
+        n_processed=n,
+        model_version=MODEL_VERSION,
+        request_id=request_id,
+        latency_ms=total_ms,
+        mean_latency_per_record_ms=mean_ms,
     )
 
 

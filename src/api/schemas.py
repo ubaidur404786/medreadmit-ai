@@ -213,8 +213,38 @@ class PatientEncounter(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Batch request schema
+# ---------------------------------------------------------------------------
+
+
+class BatchRequest(BaseModel):
+    """A batch of up to 100 patient encounters for bulk inference."""
+
+    encounters: list[PatientEncounter] = Field(
+        ...,
+        min_length=1,
+        max_length=100,
+        description="One to 100 patient encounters to score in a single call.",
+    )
+
+
+# ---------------------------------------------------------------------------
 # Response schemas
 # ---------------------------------------------------------------------------
+
+
+class FeatureContribution(BaseModel):
+    """One feature's additive SHAP contribution to a single prediction.
+
+    ``shap_value`` is in log-odds space (raw LightGBM, before Platt scaling).
+    Platt scaling changes the calibration of predicted probabilities but
+    preserves feature rank order, so this attribution remains valid for the
+    calibrated model.
+    """
+
+    feature: str = Field(..., description="Sanitised feature name (manifest column key).")
+    shap_value: float = Field(..., description="SHAP contribution in log-odds space.")
+    feature_value: float = Field(..., description="Actual input value for this feature.")
 
 
 class PredictionResponse(BaseModel):
@@ -245,6 +275,47 @@ class PredictionResponse(BaseModel):
         ...,
         ge=0.0,
         description="End-to-end request latency in milliseconds.",
+    )
+    top_features: list[FeatureContribution] = Field(
+        default_factory=list,
+        max_length=10,
+        description="Top features by |SHAP value|, sorted descending.",
+    )
+
+
+class BatchPredictionItem(BaseModel):
+    """Prediction result for one encounter within a batch response."""
+
+    index: int = Field(..., description="Zero-based position of this encounter in the request list.")
+    probability: float = Field(..., ge=0.0, le=1.0, description="Calibrated readmission probability.")
+    risk_band: Literal["low", "moderate", "high"] = Field(
+        ..., description="Discretised risk tier."
+    )
+    top_features: list[FeatureContribution] = Field(
+        default_factory=list,
+        max_length=10,
+        description="Top features by |SHAP value|, sorted descending.",
+    )
+
+
+class BatchResponse(BaseModel):
+    """Response from POST /predict/batch."""
+
+    predictions: list[BatchPredictionItem] = Field(
+        ..., description="One item per encounter, in original request order."
+    )
+    n_processed: int = Field(..., description="Number of encounters scored.")
+    model_version: str = Field(..., description="Artifact version string.")
+    request_id: str = Field(
+        ...,
+        min_length=32,
+        max_length=32,
+        pattern=r"^[0-9a-f]{32}$",
+        description="32-character hex request identifier for tracing.",
+    )
+    latency_ms: float = Field(..., ge=0.0, description="Total end-to-end latency in milliseconds.")
+    mean_latency_per_record_ms: float = Field(
+        ..., ge=0.0, description="latency_ms / n_processed."
     )
 
 
