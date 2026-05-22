@@ -7,6 +7,16 @@ Built on the UCI Diabetes 130-US Hospitals dataset (101,766 encounters, ~70k uni
 
 ---
 
+## Live dashboard
+
+> If you only have 30 seconds: this is what the deployed system looks like. A clinician selects a patient (or pastes their structured data into the form), clicks predict, and gets a calibrated risk score with SHAP-based explanation and a fairness footnote in under a second.
+
+![High-risk patient prediction](reports/figures/dashboard/02_high_risk_patient.png)
+
+*High-risk diabetic patient with 8 prior inpatient admissions. The model returns 36% probability (3.2× base rate), classifies as HIGH, and surfaces the top drivers — prior admissions dominates at +1.7 log-odds. Latency 231 ms including SHAP computation. Fairness footnote in blue informs the clinician that AUROC for this patient's age group is 0.671 with prevalence 10.6%.*
+
+---
+
 ## Quick start (Docker)
 
 > Requires Docker Desktop ≥ 24 (or Docker Engine ≥ 24 on Linux). Start Docker Desktop before running.
@@ -50,7 +60,7 @@ docker compose -f docker/docker-compose.yml up --build
 └───────────────────┬─────────────────────────────────────┘
                     │
 ┌───────────────────▼─────────────────────────────────────┐
-│  LightGBM + Platt scaling  (models/lgbm_calibrated.joblib) │
+│  LightGBM + Platt scaling  (models/lgbm_calibrated.joblib)  │
 │  SHAP TreeExplainer  (built once at startup)            │
 │  154 features · 99,343 training encounters              │
 └─────────────────────────────────────────────────────────┘
@@ -73,6 +83,36 @@ docker compose -f docker/docker-compose.yml up --build
 Hyperparameter tuning recovered minimal additional discrimination — UCI Diabetes has a known AUROC ceiling near 0.69 with structured features alone (Strack 2014; Shang 2021). Platt scaling reduces Brier score by 57% while preserving rank order. The production model's mean predicted probability (0.112) matches the observed base rate (0.111).
 
 **Operating point:** PPV = 0.363 at threshold 0.30 → **3.3× lift** over base rate (0.114).
+
+---
+
+## Visual walkthrough
+
+The four screenshots below show the complete user flow through the deployed Streamlit dashboard. They're included so the project can be evaluated without running Docker.
+
+### 1. Initial state — sidebar model card, demo controls, collapsed input form
+
+![Dashboard initial state](reports/figures/dashboard/01_overview.png)
+
+The left sidebar serves as a *model card*: production metrics (AUROC, AUPRC, Brier), the operating-point summary (PPV at 0.30 = 0.363, 3.3× lift over base rate), training cohort coverage, and a collapsible "Limitations" block. The top of the page is intentionally sparse — a sample-patient selector and a `Predict` button — so the prediction result is the first major thing a user sees once it runs. The patient input form is collapsed below; clinicians can either load a pre-scored test patient (20 options spanning the risk spectrum) or expand the form to enter a custom encounter.
+
+### 2. High-risk prediction with SHAP attribution
+
+![High-risk patient prediction](reports/figures/dashboard/02_high_risk_patient.png)
+
+A diabetic mid-age patient with 8 prior inpatient admissions and a primary circulatory diagnosis. The model returns **36.0% probability**, classifies as **HIGH** with the `3.2× base rate` delta indicator inline, and renders an explicit clinical action line ("Recommend transitional care consult within 48h of discharge"). The SHAP horizontal bar chart below shows feature-level contributions in log-odds space — `Prior inpatient admissions (8)` dominates at +1.702, with discharge disposition and a few other features providing smaller pushes. Red bars increase risk, blue bars decrease. Total latency including SHAP: 231 ms. The blue Fairness note at the bottom is generated dynamically from the patient's age group, informing the user of the model's AUROC and base rate for that demographic.
+
+### 3. Low-risk prediction — same UI, different patient
+
+![Low-risk patient prediction](reports/figures/dashboard/03_low_risk_patient.png)
+
+A senior patient with no prior inpatient admissions and a circulatory primary diagnosis. The same UI now shows **6.2% probability**, **LOW** band with `0.5× base rate`, and the clinical action line shifts to "Standard discharge follow-up appropriate." The SHAP chart shows mostly blue bars — features pushing risk *down* (negative log-odds). This screenshot demonstrates that the same UI works coherently across the full risk spectrum and that the clinical action text changes meaningfully with the band, not just the color.
+
+### 4. Patient input form (when expanded)
+
+![Patient input form](reports/figures/dashboard/04_input_form.png)
+
+Expanding the input form reveals four logically grouped sections — **Demographics & admission**, **Clinical encounter**, **Prior utilization**, **Medications** — each laid out in a responsive 3-column grid. Auto-fill happens when a sample patient is loaded; manual entry is also supported for ad-hoc scoring. Fields are validated server-side by Pydantic schemas (`extra="forbid"` catches typos), so an invalid request returns a clean 422 with the offending field rather than reaching the model.
 
 ---
 
@@ -140,8 +180,7 @@ curl -X POST http://localhost:8000/predict \
   "request_id": "a3f2...",
   "latency_ms": 62.4,
   "top_features": [
-    {"feature": "number_inpatient", "shap_value": 0.41, "feature_value": 2.0},
-    ...
+    {"feature": "number_inpatient", "shap_value": 0.41, "feature_value": 2.0}
   ]
 }
 ```
@@ -181,7 +220,7 @@ medreadmit-ai/
 ├── tests/              49 tests (API, explainer, feature alignment, bootstrap, …)
 └── reports/
     ├── fairness/       per-subgroup CSVs with bootstrap CIs
-    └── figures/        SHAP beeswarm, waterfall, fairness bar chart
+    └── figures/        SHAP beeswarm, waterfall, fairness bar chart, dashboard screenshots
 ```
 
 ---
@@ -215,7 +254,7 @@ streamlit run frontend/app.py
 
 # 6. Tests
 pytest                               # 49 tests
-pytest tests/test_api.py -v         # API endpoint tests (requires uvicorn running)
+pytest tests/test_api.py -v          # API endpoint tests (requires uvicorn running)
 ```
 
 ---
