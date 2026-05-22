@@ -1,0 +1,47 @@
+# Virtual environment and bytecode
+.venv
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+
+# Test and CI artifacts
+.pytest_cache
+.ruff_cache
+.mypy_cache
+htmlcov
+.coverage
+
+# Version control
+.git
+.gitignore
+
+# Raw data — large, not needed in images
+data/
+
+# Experiment tracking — large, not needed in images
+mlruns/
+
+# Development-only directories
+notebooks/
+docs/
+tests/
+scripts/
+
+# Generated figures — large PNGs not needed at runtime
+reports/figures/
+
+# IDE and OS noise
+.vscode
+.idea
+*.log
+.DS_Store
+Thumbs.db
+
+# Keep:
+#   models/              ← backend needs the .joblib artifacts
+#   src/                 ← backend package
+#   frontend/            ← frontend app + sample_patients/
+#   reports/fairness/    ← Streamlit reads CSVs for fairness footnote
+#   pyproject.toml       ← package metadata
+#   requirements.txt     ← referenced in build stage

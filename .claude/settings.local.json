@@ -4,7 +4,8 @@
       "PowerShell(python -c \"import site; print\\(site.getsitepackages\\(\\)\\)\")",
       "Bash(.venv\\\\Scripts\\\\pip install *)",
       "Bash(kill %1)",
-      "Bash(.venv/Scripts/python.exe -m pytest tests/test_api_client.py -v)"
+      "Bash(.venv/Scripts/python.exe -m pytest tests/test_api_client.py -v)",
+      "PowerShell(Copy-Item \"d:\\\\Documents\\\\Intership TSC\\\\Projects\\\\medreadmit-ai\\\\docker\\\\.dockerignore\" \"d:\\\\Documents\\\\Intership TSC\\\\Projects\\\\medreadmit-ai\\\\.dockerignore\")"
     ]
   }
 }

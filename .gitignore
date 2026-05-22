@@ -68,3 +68,4 @@ htmlcov/
 
 # --- Streamlit ---
 .streamlit/secrets.toml
+.claude

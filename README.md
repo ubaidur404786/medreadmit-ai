@@ -1,69 +1,251 @@
 # MedReadmit AI
 
-30-day hospital readmission prediction from structured EHR data, with SHAP explainability, calibrated probabilities, and a demographic fairness audit. Built on UCI Diabetes 130-US Hospitals (101k encounters, 70k patients). Module 1 of 3.
+End-to-end ML system predicting **30-day hospital readmission risk** from structured EHR data.
+Calibrated LightGBM · SHAP explainability · demographic fairness audit · FastAPI backend · Streamlit dashboard · Docker.
 
-## Results (held-out test set, n=14,851)
+Built on the UCI Diabetes 130-US Hospitals dataset (101,766 encounters, ~70k unique patients, 1999–2008).
 
-| Model                         | AUROC  | AUPRC  | Brier   |
-|-------------------------------|--------|--------|---------|
-| Logistic Regression baseline  | 0.6477 | 0.2016 | 0.099   |
-| LightGBM baseline             | 0.6621 | 0.2184 | 0.223   |
-| LightGBM + Optuna (50 trials) | 0.6633 | 0.2204 | —       |
-| **LightGBM + Platt scaling**  | **0.6621** | **0.2184** | **0.095** |
+---
 
-Tuning recovered minimal additional discrimination — UCI Diabetes has a known ceiling around AUROC 0.69 with structured features (Strack 2014, Shang 2021). The production model is the calibrated LightGBM: probabilities now reflect true frequencies (mean predicted 0.112 vs observed 0.111).
+## Quick start (Docker)
+
+> Requires Docker Desktop ≥ 24 (or Docker Engine ≥ 24 on Linux). Start Docker Desktop before running.
+
+```bash
+git clone https://github.com/ubaidur404786/medreadmit-ai.git
+cd medreadmit-ai
+docker compose -f docker/docker-compose.yml up --build
+```
+
+| Service | URL |
+|---|---|
+| Streamlit dashboard | http://localhost:8501 |
+| FastAPI interactive docs | http://localhost:8000/docs |
+| FastAPI health check | http://localhost:8000/health |
+
+```powershell
+# Windows PowerShell shortcuts
+.\make.ps1 up       # build images and start both services
+.\make.ps1 down     # stop and remove containers
+.\make.ps1 logs     # stream logs from all services
+.\make.ps1 rebuild  # force rebuild with no layer cache
+```
+
+---
+
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────┐
+│  Streamlit frontend  (port 8501)                        │
+│  · Risk gauge  · SHAP waterfall  · Fairness footnote    │
+│  · Batch screening (CSV / JSON upload)                  │
+└───────────────────┬─────────────────────────────────────┘
+                    │  HTTP  (docker network)
+┌───────────────────▼─────────────────────────────────────┐
+│  FastAPI backend  (port 8000)                           │
+│  POST /predict        single encounter → probability    │
+│  POST /predict/batch  up to 100 encounters              │
+│  GET  /health         model metadata + status           │
+└───────────────────┬─────────────────────────────────────┘
+                    │
+┌───────────────────▼─────────────────────────────────────┐
+│  LightGBM + Platt scaling  (models/lgbm_calibrated.joblib) │
+│  SHAP TreeExplainer  (built once at startup)            │
+│  154 features · 99,343 training encounters              │
+└─────────────────────────────────────────────────────────┘
+```
+
+**Data flow (training):**
+`download` → `load` → `make_target` → `build_features` → `patient_grouped_split` → `train_lgbm` → `tune_lgbm` → `calibrate_lgbm`
+
+---
+
+## Model performance (held-out test set, n = 14,851)
+
+| Model | AUROC | AUPRC | Brier |
+|---|---|---|---|
+| Logistic Regression baseline | 0.648 | 0.202 | 0.099 |
+| LightGBM baseline | 0.662 | 0.218 | 0.223 |
+| LightGBM + Optuna (50 trials) | 0.663 | 0.220 | — |
+| **LightGBM + Platt scaling** *(production)* | **0.662** | **0.218** | **0.095** |
+
+Hyperparameter tuning recovered minimal additional discrimination — UCI Diabetes has a known AUROC ceiling near 0.69 with structured features alone (Strack 2014; Shang 2021). Platt scaling reduces Brier score by 57% while preserving rank order. The production model's mean predicted probability (0.112) matches the observed base rate (0.111).
+
+**Operating point:** PPV = 0.363 at threshold 0.30 → **3.3× lift** over base rate (0.114).
+
+---
 
 ## What the model learned (SHAP)
 
-Top features, mean |SHAP| across the test set:
-1. `number_inpatient` (prior admissions) — 0.246
-2. `discharge_disposition_id` — 0.164
-3. `number_diagnoses` — 0.056
-4. `diag_1_circulatory` — 0.034
-5. `time_in_hospital` — 0.026
+Top 5 features by mean |SHAP| on the test set:
 
-Prior admissions dominate, matching every major readmission study (Donzé 2013, Kansagara 2011 meta-analysis).
+| Rank | Feature | Mean \|SHAP\| |
+|---|---|---|
+| 1 | Prior inpatient admissions | 0.246 |
+| 2 | Discharge disposition code | 0.164 |
+| 3 | Number of diagnoses | 0.056 |
+| 4 | Primary diagnosis: circulatory | 0.034 |
+| 5 | Days in hospital | 0.026 |
 
-![SHAP summary plot](reports/figures/shap/summary_beeswarm.png)
+Prior admissions dominate — consistent with every major readmission meta-analysis (Kansagara 2011; Donzé 2013).
 
-## Fairness audit
+![SHAP feature importance](reports/figures/shap/summary_beeswarm.png)
 
-Discrimination varies by age:
+---
 
-| Age group | n     | AUROC  | Mean pred | Prevalence |
-|-----------|-------|--------|-----------|-----------|
-| <40       | 943   | 0.748  | 0.106     | 0.111     |
-| 40-65     | 7229  | 0.671  | 0.104     | 0.106     |
-| >65       | 6679  | 0.637  | 0.122     | 0.117     |
+## Fairness audit (age subgroups, 1000-iter bootstrap)
 
-Calibration is preserved across all age groups (mean predicted within 0.01 of observed). Gender and large racial subgroups show comparable performance; smaller race subgroups (Hispanic, Asian, Other) have insufficient sample for reliable subgroup metrics. Full audit in `reports/fairness/`.
+| Age group | n | AUROC | 95% CI | Prevalence |
+|---|---|---|---|---|
+| < 40 | 943 | 0.748 | [0.696, 0.799] | 11.1% |
+| 40–65 | 7,229 | 0.671 | [0.649, 0.692] | 10.6% |
+| > 65 | 6,679 | 0.637 | [0.616, 0.659] | 11.7% |
 
-## Methodology (one paragraph)
+![AUROC by age group](reports/figures/fairness/auroc_by_age.png)
 
-The cohort is filtered to remove expired/hospice patients (n=2,423) who cannot be readmitted. Train/val/test split is at the **patient level** using `GroupShuffleSplit` to prevent the 29% of repeat-patient encounters from leaking between splits. Features include demographics, admission/discharge codes, ICD-9 diagnoses bucketed into 9 clinical categories (Strack 2014 scheme), lab indicators (A1C, glucose), medication regimen, prior utilization. Class imbalance (11.4% positive) is handled with `class_weight="balanced"` during training; post-hoc Platt scaling on the validation set restores calibrated probabilities.
+**Key findings:**
+- CIs for 40–65 and >65 barely overlap → statistically distinguishable AUROC drop with age.
+- The <40 advantage (point estimate 0.748) is not robust — wide CI overlaps 40–65; n=943 is small.
+- Calibration is preserved across all groups (mean predicted within 0.005 of observed).
+- No detectable disparities by gender or large racial subgroups (Caucasian, AfricanAmerican).
+- Smaller subgroups (Hispanic, Asian, Other; n < 300) have CIs too wide for any claim — reported transparently rather than suppressed.
+
+Full audit CSVs: `reports/fairness/`.
+
+---
+
+## API reference
+
+### `POST /predict`
+Score a single patient encounter. Returns probability, risk band, top-5 SHAP features, and request ID.
+
+```bash
+curl -X POST http://localhost:8000/predict \
+  -H "Content-Type: application/json" \
+  -d '{
+    "race": "Caucasian", "gender": "Female", "age": "[70-80)",
+    "admission_type_id": 1, "discharge_disposition_id": 1,
+    "admission_source_id": 7, "time_in_hospital": 6,
+    "num_lab_procedures": 22, "num_medications": 14,
+    "number_diagnoses": 8, "number_inpatient": 2
+  }'
+```
+
+```json
+{
+  "probability": 0.213,
+  "risk_band": "moderate",
+  "model_version": "lgbm_calibrated_v1",
+  "request_id": "a3f2...",
+  "latency_ms": 62.4,
+  "top_features": [
+    {"feature": "number_inpatient", "shap_value": 0.41, "feature_value": 2.0},
+    ...
+  ]
+}
+```
+
+### `POST /predict/batch`
+Score 1–100 encounters in a single call. Per-record latency at N=100: **0.87 ms** (vs ~62 ms single-predict) — `pd.get_dummies` alignment runs once on the full batch.
+
+### `GET /health`
+```json
+{"status": "ok", "model_loaded": true, "n_features": 154, "model_version": "lgbm_calibrated_v1"}
+```
+
+---
+
+## Repository layout
+
+```
+medreadmit-ai/
+├── src/
+│   ├── data/           load, target label, patient-grouped split
+│   ├── features/       build_features, ICD-9 → 9 clinical groups
+│   ├── models/         LightGBM train/tune/calibrate, PlattWrapper
+│   ├── evaluate/       AUROC/AUPRC/Brier, fairness audit, bootstrap CIs
+│   ├── explain/        SHAP beeswarm / waterfall plots
+│   └── api/            FastAPI app, Pydantic schemas, feature alignment, APIExplainer
+├── frontend/
+│   ├── app.py          Streamlit dashboard (single + batch tabs)
+│   ├── components/     risk_gauge.py, shap_chart.py
+│   ├── api_client.py   httpx wrapper for the FastAPI backend
+│   └── sample_patients/  20 pre-scored test-set patients for the demo
+├── docker/
+│   ├── Dockerfile.backend   multi-stage, non-root, libgomp1
+│   ├── Dockerfile.frontend  slim, Streamlit-only deps
+│   └── docker-compose.yml   healthcheck, depends_on
+├── models/             trained artifacts (.joblib) + feature_manifest.json
+├── scripts/            benchmark, fairness audit, SHAP plots, sample export
+├── tests/              49 tests (API, explainer, feature alignment, bootstrap, …)
+└── reports/
+    ├── fairness/       per-subgroup CSVs with bootstrap CIs
+    └── figures/        SHAP beeswarm, waterfall, fairness bar chart
+```
+
+---
+
+## Reproducing from scratch
+
+```bash
+# 1. Environment
+python -m venv .venv && source .venv/bin/activate   # Linux/Mac
+# .venv\Scripts\activate                             # Windows
+pip install -e .
+pip install -r requirements.txt
+
+# 2. Data
+python -m src.data.download          # fetch UCI dataset → data/raw/diabetes.csv
+
+# 3. Training pipeline
+python -m src.models.train_lgbm      # LightGBM baseline
+python -m src.models.tune_lgbm       # Optuna 50-trial search
+python -m src.models.calibrate_lgbm  # Platt scaling
+python scripts/export_feature_manifest.py  # write models/feature_manifest.json
+
+# 4. Analysis
+python scripts/run_shap_analysis.py  # SHAP plots → reports/figures/shap/
+python scripts/run_fairness_audit.py # fairness CSVs + bootstrap CIs
+python scripts/plot_fairness_age.py  # AUROC-by-age bar chart
+
+# 5. API + frontend (development, no Docker)
+uvicorn src.api.main:app --host 127.0.0.1 --port 8000
+streamlit run frontend/app.py
+
+# 6. Tests
+pytest                               # 49 tests
+pytest tests/test_api.py -v         # API endpoint tests (requires uvicorn running)
+```
+
+---
 
 ## Tech stack
 
-Python 3.11 · pandas · scikit-learn · LightGBM · Optuna · SHAP · MLflow · pytest
+| Layer | Libraries |
+|---|---|
+| ML | LightGBM · scikit-learn · Optuna · SHAP |
+| Data | pandas · NumPy |
+| API | FastAPI · Pydantic v2 · uvicorn · httpx |
+| Frontend | Streamlit · Plotly |
+| Infra | Docker · docker compose |
+| Tracking | MLflow |
+| Testing | pytest (49 tests) |
 
-## Roadmap
+Python 3.12 · Ubuntu 24.04 (Docker base: `python:3.12-slim-bookworm`)
 
-- **Module 1 (complete):** Structured baseline, calibrated LightGBM, SHAP, fairness audit
-- **Module 2 (next):** Bio_ClinicalBERT on discharge notes (MIMIC-IV)
-- **Module 3:** Late-fusion model, FastAPI backend, Streamlit dashboard, Docker, CI/CD
+---
 
-## Reproducing
+## Methodology
 
-```bash
-pip install -e .
-python -m src.data.download
-python -m src.models.train_lgbm
-python -m src.models.tune_lgbm
-python -m src.models.calibrate_lgbm
-python scripts/run_shap_analysis.py
-python scripts/run_fairness_audit.py
-pytest
-```
+**Cohort:** Expired/hospice patients (n = 2,423; disposition IDs 11, 13, 14, 19–21) are excluded because they cannot be readmitted — including them would inflate apparent model performance.
 
+**Split:** Patient-level `GroupShuffleSplit` (70/15/15 on `patient_nbr`) prevents the 29% of repeat-encounter patients from leaking between train, val, and test. Row-level splits would report inflated AUROC.
 
-A fairness audit with 1000-iteration percentile bootstrap CIs revealed a statistically distinguishable AUROC drop with age (40-65: 0.671 [0.649, 0.692] vs >65: 0.637 [0.616, 0.659]; CIs barely overlap). Calibration is preserved across all groups (mean predicted within 0.005 of observed). Apparent advantage for patients under 40 (point estimate 0.748) is not robust — CI [0.696, 0.799] overlaps with 40-65, and the subgroup is small (n=943). No detectable disparities by gender, race (for the two large racial subgroups), or admission type. Smaller racial subgroups (Hispanic, Other, Asian; n<300) have CIs too wide to support any claim; we report them transparently rather than excluding them.
+**Features:** Demographics, admission/discharge codes, ICD-9 diagnoses bucketed into 9 clinical categories (circulatory, respiratory, digestive, diabetes, injury, musculoskeletal, genitourinary, neoplasms, other; Strack 2014 scheme), A1C result, max glucose, medication regimen, prior utilization. One-hot encoded → 154 binary/numeric features.
+
+**Imbalance:** `class_weight="balanced"` during LightGBM training. Post-hoc Platt scaling on the validation set restores calibrated probabilities without retraining.
+
+**Feature alignment:** A `feature_manifest.json` frozen at training time is the contract between the training pipeline and the inference API. At inference, `align_to_training_schema` reindexes to the 154 training columns (fills missing with 0, drops unseen extras). Batch alignment runs `pd.get_dummies` once on all N rows — critical for the 65× per-record speedup at N=100.
+
+**SHAP:** `APIExplainer` wraps the underlying `LGBMClassifier` (not the `PlattWrapper`) because `shap.TreeExplainer` requires a tree-native object. Values are in log-odds space (pre-Platt); Platt scaling preserves feature rank order so the attribution remains valid for the calibrated model.
